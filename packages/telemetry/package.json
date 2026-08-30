@@ -1,0 +1,40 @@
+{
+  "name": "@mohadjillani/telemetry",
+  "version": "0.1.0",
+  "description": "OpenTelemetry bootstrap, trace-aware pino logger, queue context propagation and RED metrics helpers for Node services.",
+  "author": "Mohad Jillani <mohad.jillani@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohadjillani/node-observability-stack.git",
+    "directory": "packages/telemetry"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./register": "./dist/register.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.79.0",
+    "@opentelemetry/core": "^2.10.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/instrumentation-express": "^0.69.0",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-node": "^0.221.0",
+    "@opentelemetry/sdk-trace-node": "^2.10.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
+    "import-in-the-middle": "^3.0.0",
+    "pino": "^10.3.1",
+    "prom-client": "^15.1.3"
+  }
+}

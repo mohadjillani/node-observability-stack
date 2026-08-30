@@ -1,0 +1,25 @@
+{
+  "name": "worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Demo queue worker: consumes orders from BullMQ, prices them through the API and writes the result.",
+  "author": "Mohad Jillani <mohad.jillani@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --import @mohadjillani/telemetry/register dist/main.js",
+    "dev": "tsx watch --env-file=../../.env --import @mohadjillani/telemetry/register src/main.ts"
+  },
+  "dependencies": {
+    "@mohadjillani/telemetry": "*",
+    "bullmq": "^5.81.0",
+    "ioredis": "^5.11.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@mohadjillani/telemetry": ["packages/telemetry/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/*/src",
+    "packages/*/test",
+    "services/*/src",
+    "services/*/test",
+    "test",
+    "scripts",
+    "vitest.config.ts",
+    "eslint.config.mjs"
+  ]
+}

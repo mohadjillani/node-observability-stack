@@ -1,0 +1,30 @@
+{
+  "name": "api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Demo HTTP API: creates orders in PostgreSQL and enqueues them for the worker.",
+  "author": "Mohad Jillani <mohad.jillani@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --import @mohadjillani/telemetry/register dist/main.js",
+    "dev": "tsx watch --env-file=../../.env --import @mohadjillani/telemetry/register src/main.ts"
+  },
+  "dependencies": {
+    "@mohadjillani/telemetry": "*",
+    "bullmq": "^5.81.0",
+    "express": "^5.2.1",
+    "ioredis": "^5.11.0",
+    "pg": "^8.23.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.2.2"
+  }
+}
