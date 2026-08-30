@@ -1,0 +1,79 @@
+// Container logs → Loki. Alloy tails the Docker log driver, so the services
+// write plain JSON to stdout and know nothing about Loki. See docs/adr/0004
+// for why this is Alloy rather than Promtail, and why logs go straight to
+// Loki rather than through the Collector.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // The compose service name is the `service` label — the same value the
+  // services stamp on their own lines and the traces carry as service.name.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Only the demo services. The backends log plenty, and none of it carries
+  // a trace id.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "api|worker"
+    action        = "keep"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.process.pino.receiver]
+}
+
+loki.process "pino" {
+  // One JSON object per line (pino). `level` is a bounded set, so it becomes
+  // a label. `trace_id` and `span_id` are unbounded: they become structured
+  // metadata — queryable with `| trace_id = "…"`, but never indexed as a
+  // label, which is what keeps Loki's index small.
+  stage.json {
+    expressions = {
+      level    = "level",
+      trace_id = "trace_id",
+      span_id  = "span_id",
+      time     = "time",
+    }
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.structured_metadata {
+    values = {
+      trace_id = "",
+      span_id  = "",
+    }
+  }
+
+  // Use the time the service wrote, not the time Alloy read the line.
+  stage.timestamp {
+    source = "time"
+    format = "RFC3339Nano"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

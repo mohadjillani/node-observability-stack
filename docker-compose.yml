@@ -1,13 +1,13 @@
 # The whole stack: the two services, their Redis and PostgreSQL, and the
 # telemetry pipeline — OpenTelemetry Collector, Tempo, Loki, Prometheus,
-# Grafana. One command:
+# Alloy, Grafana. One command:
 #
 #   docker compose up --build --wait
 #   open http://localhost:3001            # grafana (anonymous admin, local only)
 #   ./scripts/break-it.sh                 # traffic that makes the dashboards interesting
 #
 # Ports: api 3000 · grafana 3001 · prometheus 9090 · tempo 3200 · loki 3100 ·
-# collector 4317/4318 (OTLP) and 8889 (re-exported metrics with exemplars).
+# alloy 12345 · collector 4317/4318 (OTLP) and 8889 (re-exported metrics with exemplars).
 name: node-observability-stack
 
 services:
@@ -140,6 +140,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  alloy:
+    # Reads container logs from the Docker socket and ships the two demo
+    # services' lines to Loki. See alloy/config.alloy.
+    image: grafana/alloy:v1.5.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - '12345:12345'
+    depends_on:
+      loki: { condition: service_healthy }
 
   grafana:
     image: grafana/grafana:11.4.0
