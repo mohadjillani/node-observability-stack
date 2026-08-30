@@ -1,0 +1,87 @@
+# The single ingestion point for application telemetry.
+#
+#   services --OTLP/HTTP--> otlp receiver --> traces pipeline --> Tempo
+#   services <--scrape--- prometheus receiver --> metrics pipeline --> :8889 --> scraped by Prometheus
+#
+# The services never learn where Tempo or Prometheus live; swapping a backend
+# (Grafana Cloud, a vendor) is an exporter change here. Container logs do not
+# pass through here — Alloy reads them from Docker and writes to Loki
+# directly (see alloy/config.alloy and docs/adr/0004).
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # The services expose prom-client metrics in OpenMetrics format with
+  # exemplars. Scraping them here (rather than from Prometheus directly) keeps
+  # Prometheus' scrape config to one target and lets the Collector be the
+  # place where labels are normalised. Exemplars survive the round trip:
+  # this receiver keeps them, and the prometheus exporter below emits them.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: api
+          scrape_interval: 5s
+          static_configs:
+            - targets: ['api:3000']
+        - job_name: worker
+          scrape_interval: 5s
+          static_configs:
+            - targets: ['worker:9464']
+
+processors:
+  # Refuse data before the process is OOM-killed; the SDKs retry.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # OpenMetrics output is what carries exemplars to Prometheus.
+    enable_open_metrics: true
+    # job/instance from the scrape become service_name/service_instance_id
+    # labels, matching the resource attributes on the traces.
+    resource_to_telemetry_conversion:
+      enabled: true
+    send_timestamps: true
+
+  # Uncomment to see every span on the Collector's stdout while debugging.
+  # debug:
+  #   verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+  telemetry:
+    metrics:
+      # The Collector's own metrics on :8888; Prometheus scrapes them so the
+      # pipeline itself is on the dashboard (dropped spans, queue size).
+      level: normal
+      address: 0.0.0.0:8888

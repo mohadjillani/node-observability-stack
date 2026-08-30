@@ -1,0 +1,35 @@
+# Single-binary Tempo with local storage. Enough for a laptop; the local
+# backend would be S3/GCS with the same config keys in a real deployment.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # Flush blocks quickly so a trace is searchable soon after it arrives.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# Lets Grafana and the e2e tests search over HTTP without gRPC streaming.
+stream_over_http_enabled: true
+
+usage_report:
+  reporting_enabled: false

@@ -1,0 +1,32 @@
+# Prometheus scrapes the Collector, not the services: the Collector already
+# scrapes them and re-exports the series (with exemplars) on :8889.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: otel-collector
+    # Keep the labels the Collector attached (service_name from its scrape
+    # jobs) instead of overwriting them with this scrape's job/instance.
+    honor_labels: true
+    static_configs:
+      - targets: ['otel-collector:8889']
+
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ['otel-collector:8888']
+
+  - job_name: tempo
+    static_configs:
+      - targets: ['tempo:3200']
+
+  - job_name: loki
+    static_configs:
+      - targets: ['loki:3100']
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
