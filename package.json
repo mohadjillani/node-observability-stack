@@ -29,6 +29,7 @@
     "pretest": "npm run build",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
+    "pretest:e2e": "npm run build",
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
