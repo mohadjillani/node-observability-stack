@@ -44,6 +44,19 @@ function isSampled(flags: number): boolean {
  * place the exporter reads them, so a log line and its trace cannot
  * disagree. The mixin runs per call; nothing has to be passed around.
  */
+/**
+ * Waits for buffered lines to reach the destination. pino writes to a pipe
+ * asynchronously, so a `process.exit()` right after the last log call can
+ * drop it; call this first.
+ */
+export function flushLogger(logger: Logger): Promise<void> {
+  return new Promise((resolve) => {
+    logger.flush(() => {
+      resolve();
+    });
+  });
+}
+
 export function createLogger(options: CreateLoggerOptions): Logger {
   const loggerOptions: LoggerOptions = {
     level: options.level ?? 'info',

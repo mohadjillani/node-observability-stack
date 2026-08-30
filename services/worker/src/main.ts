@@ -1,4 +1,4 @@
-import { createLogger } from '@mohadjillani/telemetry';
+import { createLogger, flushLogger, shutdownTelemetry } from '@mohadjillani/telemetry';
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { loadConfig } from './config.js';
@@ -44,9 +44,9 @@ worker.on('failed', (job, error) => {
 worker.on('error', (error) => {
   logger.error({ err: error }, 'worker error');
 });
-worker.on('ready', () => {
-  logger.info({ queue: config.QUEUE_NAME, concurrency: config.WORKER_CONCURRENCY }, 'worker ready');
-});
+
+await worker.waitUntilReady();
+logger.info({ queue: config.QUEUE_NAME, concurrency: config.WORKER_CONCURRENCY }, 'worker ready');
 
 let stopping = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -62,8 +62,11 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   await worker.close();
   await connection.quit();
   await database.close();
+  // Last, so the spans of the jobs that just finished are exported too.
+  await shutdownTelemetry();
   clearTimeout(deadline);
   logger.info('stopped');
+  await flushLogger(logger);
   process.exit(0);
 }
 

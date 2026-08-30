@@ -1,4 +1,4 @@
-import { createLogger } from '@mohadjillani/telemetry';
+import { createLogger, flushLogger, shutdownTelemetry } from '@mohadjillani/telemetry';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
@@ -16,7 +16,9 @@ const queue = createOrdersQueue({ redisUrl: config.REDIS_URL, queueName: config.
 
 const app = createApp({ store, queue, logger, pricing: { slowMs: config.SLOW_PRICING_MS } });
 const server = app.listen(config.PORT, config.HOST, () => {
-  logger.info({ port: config.PORT, queue: config.QUEUE_NAME }, 'api listening');
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : config.PORT;
+  logger.info({ port, queue: config.QUEUE_NAME }, 'api listening');
 });
 
 let stopping = false;
@@ -36,8 +38,11 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   });
   await queue.close();
   await store.close();
+  // Last, so the spans from the requests drained above are exported too.
+  await shutdownTelemetry();
   clearTimeout(deadline);
   logger.info('stopped');
+  await flushLogger(logger);
   process.exit(0);
 }
 
