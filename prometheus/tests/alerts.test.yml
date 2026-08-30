@@ -63,6 +63,9 @@ tests:
     interval: 5s
     input_series:
       # Cumulative buckets: 10% under 100ms, 20% under 500ms, all under 1s.
+      # Rates: 0.2/s at le=0.1, 0.4/s at le=0.5, 2/s at le=1. The 0.95 rank
+      # is 1.9, inside the (0.5, 1] bucket, and interpolates to
+      # 0.5 + (1.9 - 0.4) / (2 - 0.4) * 0.5 = 0.96875s.
       - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.1"}'
         values: '0+1x120'
       - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.5"}'
@@ -79,7 +82,7 @@ tests:
               severity: ticket
               service: api
             exp_annotations:
-              summary: 'api: p95 latency is 937.5ms'
+              summary: 'api: p95 latency is 968.8ms'
               description: 'The 95th percentile of request latency for api has been above 500 ms for 5 minutes.'
               runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#highlatencyp95'
 
