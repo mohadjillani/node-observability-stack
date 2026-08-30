@@ -25,7 +25,10 @@ if (!enabled) console.log('e2e: skipped (set E2E=1 with the compose stack up)');
  * points at a trace Tempo has. Runs in CI's e2e job after `compose up`.
  */
 describe.skipIf(!enabled)('signals across the compose stack', () => {
-  const sku = `E2E-${String(Date.now())}`;
+  // A SLOW- sku: the pricing hop takes 1.5 s, which puts the trace over the
+  // tail sampler's 500 ms latency policy, so it is kept deterministically.
+  // A fast, successful order would only survive the 20% baseline policy.
+  const sku = `SLOW-E2E-${String(Date.now())}`;
   let orderId: string;
   let traceId: string;
   let spans: TempoSpan[];
