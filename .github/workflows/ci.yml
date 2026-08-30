@@ -114,9 +114,15 @@ jobs:
         run: ROUNDS=3 PAUSE=0 ./scripts/break-it.sh
       - name: end-to-end checks against tempo, loki, prometheus and grafana
         run: E2E=1 npm run test:e2e
-      - name: logs on failure
+      - name: container status and logs on failure
         if: failure()
-        run: docker compose logs --no-color --tail=200
+        run: |
+          docker compose ps -a
+          for service in $(docker compose config --services); do
+            echo "::group::$service"
+            docker compose logs --no-color "$service"
+            echo "::endgroup::"
+          done
       - name: stop
         if: always()
         run: docker compose down -v
