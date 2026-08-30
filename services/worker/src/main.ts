@@ -12,7 +12,12 @@ const logger = createLogger(process.env.OTEL_SERVICE_NAME ?? 'worker', config.LO
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const database = createDatabase(config.DATABASE_URL);
 const pricing = createPricingClient(config.API_URL);
-const process_ = createProcessor({ writer: database, pricing, logger });
+const process_ = createProcessor({
+  queueName: config.QUEUE_NAME,
+  writer: database,
+  pricing,
+  logger,
+});
 
 const worker = new Worker<OrderJobData, ProcessResult>(config.QUEUE_NAME, process_, {
   connection,

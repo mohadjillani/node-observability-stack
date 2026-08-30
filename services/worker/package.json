@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@mohadjillani/telemetry": "*",
+    "@opentelemetry/api": "^1.9.0",
     "bullmq": "^5.81.0",
     "ioredis": "^5.11.0",
     "pg": "^8.23.0"
