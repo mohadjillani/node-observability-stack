@@ -15,6 +15,7 @@
     "test",
     "scripts",
     "vitest.config.ts",
+    "vitest.e2e.config.ts",
     "eslint.config.mjs"
   ]
 }

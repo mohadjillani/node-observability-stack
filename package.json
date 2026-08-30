@@ -28,7 +28,8 @@
     "format:check": "prettier --check .",
     "pretest": "npm run build",
     "test": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
