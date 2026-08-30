@@ -1,3 +1,11 @@
+# Three datasources and the links between them. This file is what turns three
+# stores into one view:
+#
+#   Prometheus ──exemplar (trace_id)──▶ Tempo ──tracesToLogs (trace_id)──▶ Loki
+#        ▲                                ▲                                  │
+#        └──── tracesToMetrics ───────────┘◀──── derived field / correlation ─┘
+#
+# `$$` is how a literal `$` survives Grafana's provisioning-time env expansion.
 apiVersion: 1
 
 datasources:
@@ -7,15 +15,83 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    jsonData:
+      httpMethod: POST
+      # A histogram sample's exemplar carries `trace_id`; clicking it opens
+      # that trace in Tempo. Panels must have "exemplar": true on the query.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
 
   - name: Tempo
     uid: tempo
     type: tempo
     access: proxy
     url: http://tempo:3200
+    jsonData:
+      # Span → its log lines: every line carries trace_id as structured
+      # metadata, so the query is a metadata filter, not a text search.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{service=~"api|worker"} | trace_id = "$${__trace.traceId}"'
+      # Span → the RED series of the service that produced it.
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
+        tags:
+          - key: service.name
+            value: service
+        queries:
+          - name: Request rate
+            query: 'sum(rate(http_server_request_duration_seconds_count{$$__tags}[1m]))'
+          - name: p95 latency
+            query: 'histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{$$__tags}[1m])))'
+          - name: Error ratio
+            query: 'sum(rate(http_server_request_duration_seconds_count{$$__tags, status_code=~"5.."}[1m])) / sum(rate(http_server_request_duration_seconds_count{$$__tags}[1m]))'
+      nodeGraph:
+        enabled: true
+      traceQuery:
+        timeShiftEnabled: true
+        spanStartTimeShift: '-1h'
+        spanEndTimeShift: '1h'
+      spanBar:
+        type: Tag
+        tag: http.route
 
   - name: Loki
     uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      # Log line → its trace, as a button on the line's detected trace_id.
+      derivedFields:
+        - name: trace_id
+          datasourceUid: tempo
+          matcherType: regex
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: '$${__value.raw}'
+          urlDisplayLabel: View trace
+    # The same link as a Grafana correlation, which also appears in Explore's
+    # split view and can be provisioned for any pair of datasources.
+    correlations:
+      - targetUID: tempo
+        label: Trace for this line
+        description: Open the trace whose id this log line carries
+        config:
+          type: query
+          field: Line
+          target:
+            query: '$${trace_id}'
+            queryType: traceql
+          transformations:
+            - type: regex
+              field: Line
+              expression: '"trace_id":"(\w+)"'
+              mapValue: trace_id
