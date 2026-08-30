@@ -1,20 +1,30 @@
-import { createLogger, flushLogger, shutdownTelemetry } from '@mohadjillani/telemetry';
+import {
+  createLogger,
+  createMetrics,
+  flushLogger,
+  shutdownTelemetry,
+} from '@mohadjillani/telemetry';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
 import { createOrdersQueue } from './queue.js';
 
 const config = loadConfig();
-const logger = createLogger({
-  service: process.env.OTEL_SERVICE_NAME ?? 'api',
-  level: config.LOG_LEVEL,
-});
+const service = process.env.OTEL_SERVICE_NAME ?? 'api';
+const logger = createLogger({ service, level: config.LOG_LEVEL });
+const metrics = createMetrics({ service });
 
 const store = createDatabase(config.DATABASE_URL);
 await store.migrate();
 const queue = createOrdersQueue({ redisUrl: config.REDIS_URL, queueName: config.QUEUE_NAME });
 
-const app = createApp({ store, queue, logger, pricing: { slowMs: config.SLOW_PRICING_MS } });
+const app = createApp({
+  store,
+  queue,
+  logger,
+  metrics,
+  pricing: { slowMs: config.SLOW_PRICING_MS },
+});
 const server = app.listen(config.PORT, config.HOST, () => {
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : config.PORT;

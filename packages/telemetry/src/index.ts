@@ -22,3 +22,20 @@ export type {
   ConsumerOperation,
   ConsumerOptions,
 } from './propagation.js';
+export {
+  createMetrics,
+  routeTemplate,
+  activeExemplar,
+  looksHighCardinality,
+  findHighCardinalityLabels,
+  UNMATCHED_ROUTE,
+} from './metrics.js';
+export type {
+  Metrics,
+  MetricsOptions,
+  QueueDepth,
+  JobObservation,
+  JobOutcome,
+  RouteAwareRequest,
+  ExemplarLabels,
+} from './metrics.js';

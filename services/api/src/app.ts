@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Logger } from '@mohadjillani/telemetry';
+import type { Logger, Metrics } from '@mohadjillani/telemetry';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { OrdersStore } from './db.js';
@@ -10,6 +10,7 @@ export interface AppDependencies {
   readonly store: OrdersStore;
   readonly queue: OrdersQueue;
   readonly logger: Logger;
+  readonly metrics: Metrics;
   readonly pricing?: PricingOptions;
 }
 
@@ -26,10 +27,14 @@ const pricingQuery = z.object({
 const orderIdParam = z.object({ id: z.uuid() });
 
 export function createApp(deps: AppDependencies): Express {
-  const { store, queue, logger } = deps;
+  const { store, queue, logger, metrics } = deps;
   const app = express();
   app.disable('x-powered-by');
+  // First, so every response — including 404s and errors — is counted.
+  app.use(metrics.httpMiddleware());
   app.use(express.json({ limit: '16kb' }));
+
+  app.get('/metrics', metrics.handler());
 
   app.get('/healthz', (_request, response) => {
     response.json({ status: 'ok' });

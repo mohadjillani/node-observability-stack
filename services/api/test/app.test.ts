@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
-import { fakeQueue, fakeStore, json, silentLogger } from './helpers.js';
+import { fakeQueue, fakeStore, json, silentLogger, testMetrics } from './helpers.js';
 
 function testApp(overrides: { slowMs?: number } = {}) {
   const store = fakeStore();
@@ -10,6 +10,7 @@ function testApp(overrides: { slowMs?: number } = {}) {
     store,
     queue,
     logger: silentLogger,
+    metrics: testMetrics(),
     pricing: { slowMs: overrides.slowMs ?? 0 },
   });
   return { app, store, queue };

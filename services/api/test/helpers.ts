@@ -1,3 +1,4 @@
+import { createMetrics, type Metrics } from '@mohadjillani/telemetry';
 import { pino } from 'pino';
 import type { NewOrder, Order, OrdersStore } from '../src/db.js';
 import type { OrderJobData, OrdersQueue } from '../src/queue.js';
@@ -60,4 +61,9 @@ export const silentLogger = pino({ level: 'silent' });
 /** supertest types `body` as `any`; take it as `unknown` and name the shape at the call site. */
 export function json(response: { body: unknown }): unknown {
   return response.body;
+}
+
+/** A fresh registry per test app; default (runtime) metrics are left out to keep the output small. */
+export function testMetrics(): Metrics {
+  return createMetrics({ service: 'api-test', defaultMetrics: false });
 }
