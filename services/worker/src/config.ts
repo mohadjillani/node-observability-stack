@@ -6,6 +6,8 @@ const schema = z.object({
   QUEUE_NAME: z.string().min(1).default('orders'),
   API_URL: z.string().min(1).default('http://127.0.0.1:3000'),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(5),
+  /** Port of the worker's own HTTP listener for `/metrics` and `/healthz`. */
+  WORKER_METRICS_PORT: z.coerce.number().int().min(0).max(65535).default(9464),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });

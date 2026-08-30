@@ -1,3 +1,4 @@
+import { createMetrics } from '@mohadjillani/telemetry';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 import type { OrderWriter } from '../src/db.js';
@@ -5,6 +6,7 @@ import { createPricingClient, PricingRequestError } from '../src/pricing-client.
 import { createProcessor, type OrderJob } from '../src/processor.js';
 
 const logger = pino({ level: 'silent' });
+const metrics = () => createMetrics({ service: 'worker-test', defaultMetrics: false });
 
 function writer(): OrderWriter & { priced: [string, number][]; failed: string[] } {
   const priced: [string, number][] = [];
@@ -46,11 +48,21 @@ describe('createProcessor', () => {
       );
     });
     const pricing = createPricingClient('http://api.test/', fetchFn);
-    const process = createProcessor({ queueName: 'orders', writer: store, pricing, logger });
+    const jobMetrics = metrics();
+    const process = createProcessor({
+      queueName: 'orders',
+      writer: store,
+      pricing,
+      logger,
+      metrics: jobMetrics,
+    });
 
     await expect(process(job())).resolves.toEqual({ totalCents: 300 });
     expect(store.priced).toEqual([['o-1', 300]]);
     expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(await jobMetrics.render()).toMatch(
+      /queue_job_duration_seconds_count\{[^}]*queue="orders",name="order.process",outcome="completed"[^}]*\} 1/,
+    );
   });
 
   it('rethrows a pricing failure without touching the row, so the queue retries', async () => {
@@ -58,10 +70,20 @@ describe('createProcessor', () => {
     const pricing = createPricingClient('http://api.test', () =>
       Promise.resolve(new Response('{"error":"pricing_unavailable"}', { status: 503 })),
     );
-    const process = createProcessor({ queueName: 'orders', writer: store, pricing, logger });
+    const jobMetrics = metrics();
+    const process = createProcessor({
+      queueName: 'orders',
+      writer: store,
+      pricing,
+      logger,
+      metrics: jobMetrics,
+    });
 
     await expect(process(job({ sku: 'FAIL-1' }))).rejects.toBeInstanceOf(PricingRequestError);
     expect(store.priced).toEqual([]);
     expect(store.failed).toEqual([]);
+    expect(await jobMetrics.render()).toMatch(
+      /queue_job_duration_seconds_count\{[^}]*queue="orders",name="order.process",outcome="failed"[^}]*\} 1/,
+    );
   });
 });
