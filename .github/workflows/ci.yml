@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.22.3+ and 24.11.1+ run the loader hook in-thread (see
+        # packages/telemetry/src/register.ts); both matrix entries resolve to
+        # the current patch release.
+        node: [22, 24]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: obs_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/obs_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      # Builds first (pretest), then unit suites plus the cross-process trace
+      # test against the service containers above.
+      - run: npm test
+      - run: npm run build
+
+  rules:
+    name: alert rules + collector config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: promtool check + test rules
+        run: |
+          docker run --rm -v "$PWD/prometheus:/prometheus:ro" --entrypoint promtool prom/prometheus:v3.0.1 \
+            check rules /prometheus/rules/alerts.yml
+          docker run --rm -v "$PWD/prometheus:/prometheus:ro" --entrypoint promtool prom/prometheus:v3.0.1 \
+            test rules /prometheus/tests/alerts.test.yml
+      - name: promtool check prometheus.yml
+        run: |
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.0.1 \
+            check config /etc/prometheus/prometheus.yml
+      - name: collector config validates
+        run: |
+          docker run --rm -v "$PWD/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            otel/opentelemetry-collector-contrib:0.116.1 validate --config=/etc/otelcol-contrib/config.yaml
+      - name: dashboards are valid json with unique panel ids
+        run: |
+          for f in grafana/dashboards/*.json; do
+            node -e "const d=require('./$f'); const ids=d.panels.map(p=>p.id); if (new Set(ids).size!==ids.length) { throw new Error('$f: duplicate panel ids'); } console.log('$f ok:', d.uid)"
+          done
+
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high
+
+  e2e:
+    name: compose stack + e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: build images and start the stack
+        run: docker compose up --build --wait --wait-timeout 180
+      - name: traffic
+        run: ROUNDS=3 PAUSE=0 ./scripts/break-it.sh
+      - name: end-to-end checks against tempo, loki, prometheus and grafana
+        run: E2E=1 npm run test:e2e
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - name: stop
+        if: always()
+        run: docker compose down -v
