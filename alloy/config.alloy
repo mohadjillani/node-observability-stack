@@ -5,6 +5,9 @@
 
 discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
+  // The default 60 s refresh leaves a fresh stack's first minute of logs
+  // untailed; the demo (and the e2e job) starts querying sooner than that.
+  refresh_interval = "5s"
 }
 
 discovery.relabel "containers" {
