@@ -1,3 +1,4 @@
+import { findHighCardinalityLabels } from '@mohadjillani/telemetry';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -31,6 +32,7 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
   let api: ServiceProcess;
   let worker: ServiceProcess;
   let apiUrl: string;
+  let workerMetricsUrl: string;
 
   beforeAll(async () => {
     receiver = await startOtlpReceiver();
@@ -46,8 +48,14 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
     api = startService('api', { ...shared, PORT: '0', SLOW_PRICING_MS: '0' });
     const listening = await api.waitForLog('api listening');
     apiUrl = `http://127.0.0.1:${String(listening.port)}`;
-    worker = startService('worker', { ...shared, API_URL: apiUrl, WORKER_CONCURRENCY: '2' });
-    await worker.waitForLog('worker ready');
+    worker = startService('worker', {
+      ...shared,
+      API_URL: apiUrl,
+      WORKER_CONCURRENCY: '2',
+      WORKER_METRICS_PORT: '0',
+    });
+    const ready = await worker.waitForLog('worker ready');
+    workerMetricsUrl = `http://127.0.0.1:${String(ready.metricsPort)}/metrics`;
   }, 30_000);
 
   afterAll(async () => {
@@ -173,6 +181,23 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
       (line) => line.msg === 'quote computed' && line.trace_id === traceId,
     );
     expect(underSpan(quoteLine?.span_id, pricingRequest)).toBe(true);
+
+    // --- metrics: the histogram samples point back at this trace ----------
+    const apiScrape = await (await fetch(`${apiUrl}/metrics`)).text();
+    const workerScrape = await (await fetch(workerMetricsUrl)).text();
+    expect(findHighCardinalityLabels(apiScrape)).toEqual([]);
+    expect(findHighCardinalityLabels(workerScrape)).toEqual([]);
+    expect(apiScrape).toMatch(
+      new RegExp(
+        `http_server_request_duration_seconds_bucket\\{[^}]*route="/orders"[^}]*\\} \\d+ # \\{trace_id="${traceId}"`,
+      ),
+    );
+    expect(workerScrape).toMatch(
+      new RegExp(
+        `queue_job_duration_seconds_bucket\\{[^}]*outcome="completed"[^}]*\\} \\d+ # \\{trace_id="${traceId}"`,
+      ),
+    );
+    expect(workerScrape).toMatch(/queue_depth\{queue="[^"]+",state="waiting"[^}]*\} 0/);
   }, 45_000);
 });
 
