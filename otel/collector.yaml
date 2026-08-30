@@ -40,6 +40,38 @@ processors:
     limit_mib: 256
     spike_limit_mib: 64
 
+  # Sampling happens here, after a trace is complete, so the decision can look
+  # at the outcome. Policies are OR-ed: a trace is kept if any policy says so.
+  # decision_wait must exceed the longest trace the demo produces (the SLOW-
+  # pricing path is 1.5 s, and a retried job can span backoff delays), else a
+  # late span arrives after the decision and is evaluated as a new trace.
+  # See docs/sampling.md for the reasoning and the failure modes.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 100
+    policies:
+      # Anything with an error status anywhere in the trace.
+      - name: errors
+        type: status_code
+        status_codes: [ERROR]
+      # Anything slow end to end.
+      - name: slow
+        type: latency
+        threshold_ms: 500
+      # Anything a downstream 5xx marked.
+      - name: server-errors
+        type: numeric_attribute
+        numeric_attribute:
+          key: http.response.status_code
+          min_value: 500
+          max_value: 599
+      # A fixed share of everything else, so the normal path stays visible.
+      - name: baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 20
+
   batch:
     timeout: 1s
     send_batch_size: 1024
@@ -72,8 +104,9 @@ service:
   extensions: [health_check]
   pipelines:
     traces:
+      # tail_sampling before batch: it needs whole traces, batch would split them.
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, tail_sampling, batch]
       exporters: [otlp/tempo]
     metrics:
       receivers: [prometheus]
