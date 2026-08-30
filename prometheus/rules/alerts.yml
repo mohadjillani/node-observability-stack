@@ -1,0 +1,100 @@
+# Alert rules. Each one says what it catches, what it deliberately does not,
+# and why the threshold is where it is; docs/alerting.md has the longer
+# version and the list of things that are intentionally not alerted on.
+# Unit-tested with promtool in prometheus/tests/.
+groups:
+  - name: api
+    rules:
+      # Symptom, not cause: users are getting errors. 5% for 2 minutes rides
+      # out a single bad deploy retry or one failing dependency call without
+      # paging, and still fires well inside a real incident. Below 1 req/s the
+      # ratio is noise (one 500 in ten requests is 10%), so a floor on the
+      # request rate is part of the condition.
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum by (service) (rate(http_server_request_duration_seconds_count{status_code=~"5.."}[2m]))
+              /
+            sum by (service) (rate(http_server_request_duration_seconds_count[2m]))
+          ) > 0.05
+          and
+          sum by (service) (rate(http_server_request_duration_seconds_count[2m])) > 1
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: '{{ $labels.service }}: {{ $value | humanizePercentage }} of requests are 5xx'
+          description: 'More than 5% of requests to {{ $labels.service }} have returned 5xx for 2 minutes. Open the RED dashboard and follow an exemplar on the 5xx series to a failing trace.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#higherrorrate'
+
+      # p95 over the histogram, per service, excluding routes that are slow by
+      # design. 500 ms matches the tail-sampling latency policy, so every trace
+      # behind this alert is in Tempo.
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service, le) (rate(http_server_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: '{{ $labels.service }}: p95 latency is {{ $value | humanizeDuration }}'
+          description: 'The 95th percentile of request latency for {{ $labels.service }} has been above 500 ms for 5 minutes.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#highlatencyp95'
+
+  - name: queue
+    rules:
+      # A backlog that keeps growing means the workers cannot keep up or are
+      # gone. 100 waiting for 5 minutes is sized to the demo's throughput;
+      # in a real deployment, derive it from the acceptable processing delay
+      # times the drain rate.
+      - alert: QueueBacklog
+        expr: queue_depth{state="waiting"} > 100
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'queue {{ $labels.queue }} has {{ $value }} jobs waiting'
+          description: 'More than 100 jobs have been waiting on {{ $labels.queue }} for 5 minutes. Check worker replicas, the Queues dashboard, and whether jobs are failing and being retried.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#queuebacklog'
+
+      # Any stall is worth a look: a job outlived its lock, which means a
+      # worker died mid-job or blocked its event loop. Not a page — the job is
+      # retried by another worker — but it should not be silent.
+      - alert: WorkerStalledJobs
+        expr: increase(queue_jobs_stalled_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'jobs stalled on {{ $labels.queue }}'
+          description: '{{ $value | humanize }} job(s) on {{ $labels.queue }} stalled in the last 10 minutes.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#workerstalledjobs'
+
+      # No worker scraped for 2 minutes: the depth gauge disappears rather than
+      # reading zero, which is exactly the case a threshold alert would miss.
+      - alert: WorkerAbsent
+        expr: absent(queue_depth{state="waiting"})
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 'no worker is reporting queue depth'
+          description: 'queue_depth has not been scraped for 2 minutes; the worker is down or unreachable by the Collector.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#workerabsent'
+
+  - name: pipeline
+    rules:
+      # The observability of the observability: if the Collector cannot get
+      # spans out, dashboards go quiet and nobody notices without this.
+      - alert: CollectorExportFailing
+        expr: sum by (exporter) (rate(otelcol_exporter_send_failed_spans_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: 'collector failing to export spans via {{ $labels.exporter }}'
+          description: 'The Collector has been failing to export spans through {{ $labels.exporter }} for 5 minutes. Traces are being dropped after the retry queue fills.'
+          runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#collectorexportfailing'

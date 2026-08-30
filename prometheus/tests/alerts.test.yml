@@ -1,0 +1,193 @@
+# promtool test rules prometheus/tests/alerts.test.yml
+#
+# Each case feeds a synthetic series and asserts whether the rule fires. The
+# point is not coverage of PromQL but pinning the intent: a low-traffic blip
+# must not page, an absent worker must.
+rule_files:
+  - ../rules/alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  # ---- HighErrorRate ---------------------------------------------------
+  - name: error rate fires at 10% on real traffic
+    interval: 5s
+    input_series:
+      # 20 req/s total, 2 req/s of them 5xx, sustained.
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="202"}'
+        values: '0+90x120'
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="500"}'
+        values: '0+10x120'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HighErrorRate
+        exp_alerts: [] # still pending: `for: 2m`
+      - eval_time: 5m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: api
+            exp_annotations:
+              summary: 'api: 10% of requests are 5xx'
+              description: 'More than 5% of requests to api have returned 5xx for 2 minutes. Open the RED dashboard and follow an exemplar on the 5xx series to a failing trace.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#higherrorrate'
+
+  - name: error rate ignores a high ratio on negligible traffic
+    interval: 5s
+    input_series:
+      # 0.4 req/s total, half of them failing: a 50% ratio, but under the floor.
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="202"}'
+        values: '0+1x120'
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="500"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  - name: error rate stays quiet at 2%
+    interval: 5s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="202"}'
+        values: '0+98x120'
+      - series: 'http_server_request_duration_seconds_count{service="api",route="/orders",status_code="500"}'
+        values: '0+2x120'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  # ---- HighLatencyP95 --------------------------------------------------
+  - name: p95 fires when most requests land above 500ms
+    interval: 5s
+    input_series:
+      # Cumulative buckets: 10% under 100ms, 20% under 500ms, all under 1s.
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.1"}'
+        values: '0+1x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.5"}'
+        values: '0+2x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="1"}'
+        values: '0+10x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="+Inf"}'
+        values: '0+10x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighLatencyP95
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: api
+            exp_annotations:
+              summary: 'api: p95 latency is 937.5ms'
+              description: 'The 95th percentile of request latency for api has been above 500 ms for 5 minutes.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#highlatencyp95'
+
+  - name: p95 stays quiet when the tail is fast
+    interval: 5s
+    input_series:
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.1"}'
+        values: '0+9x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="0.5"}'
+        values: '0+10x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="1"}'
+        values: '0+10x120'
+      - series: 'http_server_request_duration_seconds_bucket{service="api",le="+Inf"}'
+        values: '0+10x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighLatencyP95
+        exp_alerts: []
+
+  # ---- QueueBacklog ----------------------------------------------------
+  - name: backlog fires after 5 minutes above 100 waiting
+    interval: 5s
+    input_series:
+      - series: 'queue_depth{queue="orders",state="waiting",service="worker"}'
+        values: '150x120'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: QueueBacklog
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: QueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              queue: orders
+              state: waiting
+              service: worker
+            exp_annotations:
+              summary: 'queue orders has 150 jobs waiting'
+              description: 'More than 100 jobs have been waiting on orders for 5 minutes. Check worker replicas, the Queues dashboard, and whether jobs are failing and being retried.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#queuebacklog'
+
+  - name: a short spike in the backlog does not fire
+    interval: 5s
+    input_series:
+      # 3 minutes at 150, then drained.
+      - series: 'queue_depth{queue="orders",state="waiting",service="worker"}'
+        values: '150x36 0x84'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: QueueBacklog
+        exp_alerts: []
+
+  # ---- WorkerStalledJobs -----------------------------------------------
+  - name: a single stall fires immediately
+    interval: 5s
+    input_series:
+      - series: 'queue_jobs_stalled_total{queue="orders",service="worker"}'
+        values: '0x12 1x108'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: WorkerStalledJobs
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              queue: orders
+              service: worker
+            exp_annotations:
+              summary: 'jobs stalled on orders'
+              description: '1 job(s) on orders stalled in the last 10 minutes.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#workerstalledjobs'
+
+  # ---- WorkerAbsent ----------------------------------------------------
+  - name: absent worker pages after 2 minutes without the depth gauge
+    interval: 5s
+    input_series:
+      # Present for a minute, then the series stops (worker gone).
+      - series: 'queue_depth{queue="orders",state="waiting",service="worker"}'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: WorkerAbsent
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: WorkerAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              state: waiting
+            exp_annotations:
+              summary: 'no worker is reporting queue depth'
+              description: 'queue_depth has not been scraped for 2 minutes; the worker is down or unreachable by the Collector.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#workerabsent'
+
+  # ---- CollectorExportFailing ------------------------------------------
+  - name: export failures fire after 5 minutes
+    interval: 5s
+    input_series:
+      - series: 'otelcol_exporter_send_failed_spans_total{exporter="otlp/tempo"}'
+        values: '0+5x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CollectorExportFailing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              exporter: otlp/tempo
+            exp_annotations:
+              summary: 'collector failing to export spans via otlp/tempo'
+              description: 'The Collector has been failing to export spans through otlp/tempo for 5 minutes. Traces are being dropped after the retry queue fills.'
+              runbook: 'https://github.com/mohadjillani/node-observability-stack/blob/main/docs/alerting.md#collectorexportfailing'
