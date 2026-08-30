@@ -6,7 +6,7 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createLogger, traceFields } from '../src/logger.js';
+import { createLogger, flushLogger, traceFields } from '../src/logger.js';
 
 const provider = new NodeTracerProvider({
   spanProcessors: [new SimpleSpanProcessor(new InMemorySpanExporter())],
@@ -91,6 +91,14 @@ describe('createLogger', () => {
 
     expect(lines.map((line) => line.span_id)).toEqual([seen[0], seen[1], seen[0]]);
     expect(new Set(lines.map((line) => line.trace_id)).size).toBe(1);
+  });
+
+  it('flushes buffered lines on request', async () => {
+    const { lines, stream } = sink();
+    const logger = createLogger({ service: 'api', destination: stream });
+    logger.info('before exit');
+    await flushLogger(logger);
+    expect(lines.map((line) => line.msg)).toEqual(['before exit']);
   });
 
   it('exposes the same fields for callers that build their own log objects', () => {

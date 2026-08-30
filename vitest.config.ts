@@ -19,7 +19,23 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['packages/*/src/**/*.ts', 'services/*/src/**/*.ts'],
-      exclude: ['**/index.ts'],
+      // The entry points, the SDK bootstrap and the database/queue adapters
+      // only run inside the spawned services in the cross-process test,
+      // which v8 coverage cannot see; that test asserts on their output
+      // instead. Barrels and declarations have no logic.
+      exclude: [
+        '**/index.ts',
+        '**/*.d.ts',
+        '**/main.ts',
+        'packages/telemetry/src/sdk.ts',
+        'packages/telemetry/src/register.ts',
+        'services/*/src/db.ts',
+        'services/api/src/queue.ts',
+        'services/worker/src/metrics-server.ts',
+      ],
+      // What the service-less run reaches; the run with Redis and PostgreSQL
+      // reports the same because the extra test covers the excluded files.
+      thresholds: { lines: 85, functions: 85, branches: 80, statements: 85 },
     },
   },
 });
