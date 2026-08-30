@@ -51,14 +51,17 @@ processors:
     num_traces: 50000
     expected_new_traces_per_sec: 100
     policies:
-      # Anything with an error status anywhere in the trace.
+      # Anything with an error status anywhere in the trace. Each policy's
+      # options live under a block named after its type.
       - name: errors
         type: status_code
-        status_codes: [ERROR]
+        status_code:
+          status_codes: [ERROR]
       # Anything slow end to end.
       - name: slow
         type: latency
-        threshold_ms: 500
+        latency:
+          threshold_ms: 500
       # Anything a downstream 5xx marked.
       - name: server-errors
         type: numeric_attribute
