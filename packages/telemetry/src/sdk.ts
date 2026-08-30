@@ -1,5 +1,6 @@
 import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import type { Instrumentation, InstrumentationBase } from '@opentelemetry/instrumentation';
 import { ExpressLayerType } from '@opentelemetry/instrumentation-express';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -20,6 +21,8 @@ export interface TelemetryOptions {
   readonly spanProcessors?: readonly SpanProcessor[];
   /** Paths whose incoming requests are never traced (probes and the scrape endpoint). */
   readonly ignorePaths?: readonly string[];
+  /** Instrumentations to load; defaults to `createInstrumentations()`. */
+  readonly instrumentations?: readonly Instrumentation[];
 }
 
 export interface Telemetry {
@@ -67,7 +70,12 @@ export function startTelemetry(options: TelemetryOptions = {}): Telemetry {
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??
     'http://localhost:4318'
   ).replace(/\/$/, '');
-  const ignored = new Set(options.ignorePaths ?? DEFAULT_IGNORED_PATHS);
+
+  // NodeSDK builds OTLP metric and log exporters from these when unset.
+  // Metrics are scraped (metrics.ts) and logs are collected from stdout, so
+  // neither pipeline is wanted here; leave an explicit setting alone.
+  process.env.OTEL_METRICS_EXPORTER ??= 'none';
+  process.env.OTEL_LOGS_EXPORTER ??= 'none';
 
   const spanProcessors = options.spanProcessors
     ? [...options.spanProcessors]
@@ -82,27 +90,7 @@ export function startTelemetry(options: TelemetryOptions = {}): Telemetry {
     }),
     spanProcessors,
     instrumentations: [
-      getNodeAutoInstrumentations({
-        // Each of these produces a span per syscall-level operation and adds
-        // nothing to the story a trace tells here.
-        '@opentelemetry/instrumentation-fs': { enabled: false },
-        '@opentelemetry/instrumentation-net': { enabled: false },
-        '@opentelemetry/instrumentation-dns': { enabled: false },
-        // Logs are correlated by the pino mixin (logger.ts) and shipped from
-        // stdout; the pino instrumentation would send a second copy over OTLP.
-        '@opentelemetry/instrumentation-pino': { enabled: false },
-        '@opentelemetry/instrumentation-http': {
-          ignoreIncomingRequestHook: (request) => {
-            const path = request.url?.split('?')[0] ?? '';
-            return ignored.has(path);
-          },
-        },
-        '@opentelemetry/instrumentation-express': {
-          // Keep router and handler spans (they name the route template);
-          // drop the per-middleware spans, which are noise on every request.
-          ignoreLayersType: [ExpressLayerType.MIDDLEWARE],
-        },
-      }),
+      ...(options.instrumentations ?? createInstrumentations(options.ignorePaths)),
     ],
   });
 
@@ -120,6 +108,58 @@ export function startTelemetry(options: TelemetryOptions = {}): Telemetry {
     },
   };
   return active;
+}
+
+/**
+ * The instrumentation set both services run with. Exposed so the loader hook
+ * can be told exactly which modules to wrap.
+ */
+export function createInstrumentations(
+  ignorePaths: readonly string[] = DEFAULT_IGNORED_PATHS,
+): Instrumentation[] {
+  const ignored = new Set(ignorePaths);
+  return getNodeAutoInstrumentations({
+    // Each of these produces a span per syscall-level operation and adds
+    // nothing to the story a trace tells here.
+    '@opentelemetry/instrumentation-fs': { enabled: false },
+    '@opentelemetry/instrumentation-net': { enabled: false },
+    '@opentelemetry/instrumentation-dns': { enabled: false },
+    // Logs are correlated by the pino mixin (logger.ts) and shipped from
+    // stdout; the pino instrumentation would send a second copy over OTLP.
+    '@opentelemetry/instrumentation-pino': { enabled: false },
+    '@opentelemetry/instrumentation-http': {
+      ignoreIncomingRequestHook: (request) => {
+        const path = request.url?.split('?')[0] ?? '';
+        return ignored.has(path);
+      },
+    },
+    '@opentelemetry/instrumentation-express': {
+      // Keep router and handler spans (they name the route template);
+      // drop the per-middleware spans, which are noise on every request.
+      ignoreLayersType: [ExpressLayerType.MIDDLEWARE],
+    },
+  });
+}
+
+/**
+ * Bare specifiers of every module the given instrumentations patch, with
+ * `node:` aliases for builtins. The ESM loader hook wraps only these, which
+ * keeps startup fast and leaves modules it would fail to wrap alone.
+ */
+export function instrumentedModules(instrumentations: readonly Instrumentation[]): string[] {
+  const names = new Set<string>();
+  for (const instrumentation of instrumentations) {
+    // Only node instrumentations (InstrumentationBase) declare module definitions.
+    const definitions =
+      (instrumentation as Partial<InstrumentationBase>).getModuleDefinitions?.() ?? [];
+    for (const definition of definitions) {
+      names.add(definition.name);
+      if (!definition.name.includes('/') && !definition.name.startsWith('@')) {
+        names.add(`node:${definition.name}`);
+      }
+    }
+  }
+  return [...names].sort();
 }
 
 /** The telemetry started for this process, if any. */
