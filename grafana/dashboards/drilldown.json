@@ -1,0 +1,199 @@
+{
+  "uid": "nos-drilldown",
+  "title": "Drilldown \u2014 metrics, traces, logs",
+  "tags": [
+    "observability",
+    "drilldown"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "RED",
+      "type": "link",
+      "url": "/d/nos-red",
+      "keepTime": true
+    },
+    {
+      "title": "Queues & pipeline",
+      "type": "link",
+      "url": "/d/nos-queues",
+      "keepTime": true
+    },
+    {
+      "title": "Drilldown",
+      "type": "link",
+      "url": "/d/nos-drilldown",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read this",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Metric \u2192 trace \u2192 logs, in three clicks\n\n1. **Latency panel** (left): hover a diamond. That is an *exemplar* \u2014 one real request in that histogram bucket, carrying its `trace_id`. Click **Query with Tempo**.\n2. **Trace view**: the trace runs `POST /orders` \u2192 `orders send` \u2192 `orders process` (worker) \u2192 `GET /internal/pricing` (api again), with the queue hop shown as a link from the consumer span to the producer span. Click a span, then **Logs for this span**.\n3. **Logs**: every line the two services wrote under that trace, filtered by `trace_id` structured metadata \u2014 not a text search. Each line has a **View trace** button back.\n\nRun `./scripts/break-it.sh` for slow (`SLOW-*`) and failing (`FAIL-*`) orders: they are always kept by tail sampling and show up as red spans and 5xx exemplars.\n"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "api latency p95 with exemplars",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{service=\"api\"}[1m])))",
+          "legendFormat": "p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "worker job duration p95 with exemplars",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(queue_job_duration_seconds_bucket{queue=\"orders\"}[1m])))",
+          "legendFormat": "p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Recent traces that crossed the queue (TraceQL)",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ span.messaging.system = \"bullmq\" && kind = consumer }",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "Consumer spans from the worker; open one to see the whole trace including the producer side in the api."
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Log lines with a trace id",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=~\"api|worker\"} | trace_id != \"\""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "description": "Expand a line: trace_id and span_id are structured metadata, and the trace_id field carries a link to Tempo."
+    }
+  ]
+}
