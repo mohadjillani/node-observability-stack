@@ -1,5 +1,7 @@
 export { startTelemetry, shutdownTelemetry, getTelemetry } from './sdk.js';
 export type { Telemetry, TelemetryOptions } from './sdk.js';
+export { createLogger, traceFields } from './logger.js';
+export type { Logger, CreateLoggerOptions, TraceFields } from './logger.js';
 export {
   injectTraceContext,
   extractTraceContext,

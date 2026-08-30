@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import type { Logger } from '@mohadjillani/telemetry';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { OrdersStore } from './db.js';
-import type { Logger } from './logger.js';
 import { PricingUnavailableError, quote, type PricingOptions } from './pricing.js';
 import type { OrdersQueue } from './queue.js';
 

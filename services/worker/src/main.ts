@@ -1,13 +1,16 @@
+import { createLogger } from '@mohadjillani/telemetry';
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
-import { createLogger } from './logger.js';
 import { createPricingClient } from './pricing-client.js';
 import { createProcessor, type OrderJobData, type ProcessResult } from './processor.js';
 
 const config = loadConfig();
-const logger = createLogger(process.env.OTEL_SERVICE_NAME ?? 'worker', config.LOG_LEVEL);
+const logger = createLogger({
+  service: process.env.OTEL_SERVICE_NAME ?? 'worker',
+  level: config.LOG_LEVEL,
+});
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 const database = createDatabase(config.DATABASE_URL);

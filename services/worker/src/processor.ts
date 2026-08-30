@@ -1,7 +1,6 @@
-import { withConsumerSpan, type TraceCarrier } from '@mohadjillani/telemetry';
+import { withConsumerSpan, type Logger, type TraceCarrier } from '@mohadjillani/telemetry';
 import { trace } from '@opentelemetry/api';
 import type { OrderWriter } from './db.js';
-import type { Logger } from './logger.js';
 import type { PricingClient } from './pricing-client.js';
 
 /** Mirrors the api's `OrderJobData`; the queue is the contract between them. */

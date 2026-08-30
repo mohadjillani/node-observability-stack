@@ -1,11 +1,14 @@
+import { createLogger } from '@mohadjillani/telemetry';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
-import { createLogger } from './logger.js';
 import { createOrdersQueue } from './queue.js';
 
 const config = loadConfig();
-const logger = createLogger(process.env.OTEL_SERVICE_NAME ?? 'api', config.LOG_LEVEL);
+const logger = createLogger({
+  service: process.env.OTEL_SERVICE_NAME ?? 'api',
+  level: config.LOG_LEVEL,
+});
 
 const store = createDatabase(config.DATABASE_URL);
 await store.migrate();
