@@ -159,7 +159,11 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
     const apiLines = api.logs.filter((line) => line.orderId === orderId);
     const workerLines = worker.logs.filter((line) => line.orderId === orderId);
     expect(apiLines.map((line) => line.msg)).toEqual(['order created', 'order enqueued']);
-    expect(workerLines.map((line) => line.msg)).toEqual(['processing order', 'order priced']);
+    expect(workerLines.map((line) => line.msg)).toEqual([
+      'processing order',
+      'order priced',
+      'order summarised',
+    ]);
     for (const line of [...apiLines, ...workerLines]) {
       expect(line.trace_id, `trace_id on "${String(line.msg)}"`).toBe(traceId);
       expect(line.span_id).toMatch(/^[0-9a-f]{16}$/);
@@ -177,10 +181,27 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
     for (const line of apiLines) expect(underSpan(line.span_id, orderRequest)).toBe(true);
     expect(workerLines[0]?.span_id).toBe(consumer.spanId);
     expect(workerLines[1]?.span_id).toBe(consumer.spanId);
+    // The summary line is written after the model span has ended, so it
+    // belongs to the consumer span like the other two.
+    expect(workerLines[2]?.span_id).toBe(consumer.spanId);
     const quoteLine = api.logs.find(
       (line) => line.msg === 'quote computed' && line.trace_id === traceId,
     );
     expect(underSpan(quoteLine?.span_id, pricingRequest)).toBe(true);
+
+    // --- the model call is a span of this trace, under the consumer --------
+    const modelSpan = find(
+      receiver.spans,
+      (span) =>
+        span.traceId === traceId &&
+        span.service === 'worker' &&
+        span.attributes['gen_ai.operation.name'] === 'chat',
+    );
+    expect(modelSpan.name).toBe('chat demo-small');
+    expect(modelSpan.kind).toBe(SpanKind.CLIENT);
+    expect(modelSpan.parentSpanId).toBe(consumer.spanId);
+    expect(modelSpan.attributes['gen_ai.provider.name']).toBe('demo');
+    expect(Number(modelSpan.attributes['gen_ai.usage.output_tokens'])).toBeGreaterThan(0);
 
     // --- metrics: the histogram samples point back at this trace ----------
     const apiScrape = await (await fetch(`${apiUrl}/metrics`)).text();
@@ -197,6 +218,12 @@ describe.skipIf(!enabled)('a trace across the queue hop', () => {
         `queue_job_duration_seconds_bucket\\{[^}]*outcome="completed"[^}]*\\} \\d+ # \\{trace_id="${traceId}"`,
       ),
     );
+    expect(workerScrape).toMatch(
+      new RegExp(
+        `gen_ai_client_token_usage_bucket\\{[^}]*gen_ai_token_type="output"[^}]*\\} \\d+ # \\{trace_id="${traceId}"`,
+      ),
+    );
+    expect(workerScrape).toContain('model_cost_usd_total');
     expect(workerScrape).toMatch(/queue_depth\{queue="[^"]+",state="waiting"[^}]*\} 0/);
   }, 45_000);
 });
