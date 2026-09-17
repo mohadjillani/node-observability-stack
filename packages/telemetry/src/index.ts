@@ -30,6 +30,15 @@ export {
   findHighCardinalityLabels,
   UNMATCHED_ROUTE,
 } from './metrics.js';
+export { withModelSpan, GEN_AI } from './genai.js';
+export type {
+  ModelCall,
+  ModelCallObservation,
+  ModelOperation,
+  ModelUsage,
+  ReportUsage,
+  WithModelSpanOptions,
+} from './genai.js';
 export type {
   Metrics,
   MetricsOptions,
@@ -38,4 +47,5 @@ export type {
   JobOutcome,
   RouteAwareRequest,
   ExemplarLabels,
+  ModelPrice,
 } from './metrics.js';
