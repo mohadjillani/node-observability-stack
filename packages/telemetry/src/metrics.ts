@@ -1,4 +1,5 @@
 import { isSpanContextValid, trace, TraceFlags } from '@opentelemetry/api';
+import type { ModelCallObservation } from './genai.js';
 import {
   collectDefaultMetrics,
   Counter,
@@ -78,6 +79,12 @@ export interface MetricsOptions {
   readonly queueDepth?: () => Promise<readonly QueueDepth[]>;
   /** Route templates left out of the request histogram; probes and the scrape endpoint by default. */
   readonly ignoreRoutes?: readonly string[];
+  /**
+   * Price list, keyed by request model, used to turn token counts into a cost
+   * series. A model that is missing from it records tokens and no cost, which
+   * shows up as a flat line rather than as an undercount hidden in a total.
+   */
+  readonly modelPrices?: Readonly<Record<string, ModelPrice>>;
 }
 
 export interface QueueDepth {
@@ -87,6 +94,12 @@ export interface QueueDepth {
 }
 
 export type JobOutcome = 'completed' | 'failed';
+
+/** Price per million tokens, in whole US dollars. */
+export interface ModelPrice {
+  readonly inputPerMillionUsd: number;
+  readonly outputPerMillionUsd: number;
+}
 
 export interface JobObservation {
   readonly queue: string;
@@ -116,11 +129,24 @@ export interface Metrics {
   ) => Promise<void>;
   observeJob(observation: JobObservation): void;
   jobStalled(queue: string): void;
+  /** One call's tokens, duration and derived cost. */
+  observeModelCall(observation: ModelCallObservation): void;
 }
 
 const DEFAULT_HTTP_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 const DEFAULT_IGNORED_ROUTES = ['/metrics', '/healthz', '/readyz'];
 const DEFAULT_JOB_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
+
+// Both bucket sets are the ones the GenAI conventions recommend. They are far
+// wider than the HTTP buckets above on purpose: a completion's duration is
+// governed by how many tokens it decided to produce, not by a service's SLO.
+const GEN_AI_TOKEN_BUCKETS = [
+  1, 4, 16, 64, 256, 1024, 4096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216,
+  67_108_864,
+];
+const GEN_AI_DURATION_BUCKETS = [
+  0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
 
 export function createMetrics(options: MetricsOptions): Metrics {
   const registry = new Registry<OpenMetricsContentType>();
@@ -157,6 +183,48 @@ export function createMetrics(options: MetricsOptions): Metrics {
     name: 'queue_jobs_stalled_total',
     help: 'Jobs whose lock expired while a worker held them',
     labelNames: ['queue'] as const,
+    registers: [registry],
+  });
+
+  // Named for the conventions' `gen_ai.client.token.usage`, in Prometheus
+  // spelling. `token_type` is `input` or `output`, which is what makes the
+  // two halves separable at query time without two metrics.
+  const modelTokens = new Histogram({
+    name: 'gen_ai_client_token_usage',
+    help: 'Tokens per model call, split into input and output',
+    labelNames: [
+      'gen_ai_operation_name',
+      'gen_ai_provider_name',
+      'gen_ai_request_model',
+      'gen_ai_token_type',
+    ] as const,
+    buckets: GEN_AI_TOKEN_BUCKETS,
+    enableExemplars: true,
+    registers: [registry],
+  });
+
+  const modelDuration = new Histogram({
+    name: 'gen_ai_client_operation_duration_seconds',
+    help: 'Duration of model calls, including those that failed',
+    labelNames: [
+      'gen_ai_operation_name',
+      'gen_ai_provider_name',
+      'gen_ai_request_model',
+      'error_type',
+    ] as const,
+    buckets: GEN_AI_DURATION_BUCKETS,
+    enableExemplars: true,
+    registers: [registry],
+  });
+
+  // Deliberately not named `gen_ai_*`: the conventions define no cost metric,
+  // because cost is not something a provider reports. It is tokens multiplied
+  // by a price this service was configured with, and a name that implied
+  // otherwise would be a claim the data cannot support. See docs/adr/0006.
+  const modelCost = new Counter({
+    name: 'model_cost_usd_total',
+    help: 'Cost of model calls in USD, derived from tokens and the configured price list',
+    labelNames: ['gen_ai_provider_name', 'gen_ai_request_model', 'gen_ai_token_type'] as const,
     registers: [registry],
   });
 
@@ -214,6 +282,49 @@ export function createMetrics(options: MetricsOptions): Metrics {
         value: observation.durationSeconds,
         ...exemplarFor(activeExemplar()),
       });
+    },
+
+    observeModelCall(observation) {
+      const exemplar = exemplarFor(activeExemplar());
+      const base = {
+        gen_ai_operation_name: observation.operation,
+        gen_ai_provider_name: observation.provider,
+        gen_ai_request_model: observation.requestModel,
+      };
+
+      modelDuration.observe({
+        labels: { ...base, error_type: observation.errorType ?? '' },
+        value: observation.durationSeconds,
+        ...exemplar,
+      });
+
+      // A failed call reports zero tokens. Observing the zeros would put a
+      // sample in the bottom bucket of every failure and drag the token
+      // percentiles towards nothing, so the call is counted by the duration
+      // histogram above and left out of the token one.
+      if (observation.errorType !== undefined) return;
+
+      const price = options.modelPrices?.[observation.requestModel];
+      for (const [tokenType, count, perMillion] of [
+        ['input', observation.inputTokens, price?.inputPerMillionUsd],
+        ['output', observation.outputTokens, price?.outputPerMillionUsd],
+      ] as const) {
+        modelTokens.observe({
+          labels: { ...base, gen_ai_token_type: tokenType },
+          value: count,
+          ...exemplar,
+        });
+        if (perMillion !== undefined && count > 0) {
+          modelCost.inc(
+            {
+              gen_ai_provider_name: observation.provider,
+              gen_ai_request_model: observation.requestModel,
+              gen_ai_token_type: tokenType,
+            },
+            (count / 1_000_000) * perMillion,
+          );
+        }
+      }
     },
 
     jobStalled(queue) {
