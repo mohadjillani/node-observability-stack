@@ -15,6 +15,7 @@ A production-oriented reference stack: the pipeline configuration is the product
 | Logs via Alloy from stdout, `trace_id` as structured metadata     | stdout is the contract with the platform; a trace id per label would destroy Loki's index                                | [0004](docs/adr/0004-alloy-over-promtail.md)                                     |
 | Exemplars are the metrics→traces link, so metrics use prom-client | The JS metrics SDK does not record exemplars; without them metrics and traces are silos                                  | [0005](docs/adr/0005-exemplars-as-the-metrics-to-traces-link.md)                 |
 | ESM instrumentation through Node's synchronous loader hook        | The off-thread loader deadlocked the worker on every other start; the in-thread hook has no handshake to deadlock        | [0006](docs/adr/0006-esm-instrumentation-through-the-synchronous-loader-hook.md) |
+| Model cost is a derived series, not a `gen_ai` one                | The conventions define no cost metric because a provider reports tokens, not what they cost this account                 | [0007](docs/adr/0007-cost-is-derived-so-it-does-not-carry-the-genai-prefix.md)   |
 
 ## Architecture
 
@@ -70,12 +71,12 @@ Ports: api `3000` · Grafana `3001` · Prometheus `9090` · Tempo `3200` · Loki
 
 ## What to look at
 
-Three dashboards are provisioned; **Drilldown** (`/d/nos-drilldown`) is the tour.
+Four dashboards are provisioned; **Drilldown** (`/d/nos-drilldown`) is the tour.
 
 1. **Metric → trace.** On the _api latency p95_ panel, the diamonds are exemplars: each is one real request in that histogram bucket, carrying its `trace_id`. Hover one and choose _Query with Tempo_. Slow requests from `break-it.sh` (`SLOW-*` skus, 1.5 s in the pricing hop) sit well above the line.
 2. **The trace.** It runs `POST /orders` → `orders send` (producer) → `orders process` (consumer, in the worker) → `GET /internal/pricing` (api again), with the pg and Redis client spans under each. The consumer span shows the queue hop as a link to the producer span and carries `messaging.bullmq.job.wait_ms`. A `FAIL-*` order has the pricing span in red and three consumer spans — one per attempt — under one producer.
 3. **Trace → logs.** Click a span, then _Logs for this span_. Grafana runs `{service=~"api|worker"} | trace_id = "…"` — a structured-metadata filter, not a text search — and lists every line both services wrote under that trace. Each line has a _View trace_ button back.
-4. **RED** (`/d/nos-red`) is per service by route template: rate, 5xx ratio, p50/p95/p99 with exemplars, in-flight requests, event-loop lag. **Queues & pipeline** (`/d/nos-queues`) has depth by state, throughput by outcome, job duration with exemplars, stalls, and the Collector's own receive/export/tail-sampling counters.
+4. **RED** (`/d/nos-red`) is per service by route template: rate, 5xx ratio, p50/p95/p99 with exemplars, in-flight requests, event-loop lag. **Queues & pipeline** (`/d/nos-queues`) has depth by state, throughput by outcome, job duration with exemplars, stalls, and the Collector's own receive/export/tail-sampling counters. **Model calls & spend** (`/d/nos-model`) covers the worker's model call: calls per second by outcome, duration and tokens with exemplars, and spend split by token type.
 5. **Alerts.** `http://localhost:9090/alerts`. After `break-it.sh`, `HighLatencyP95` goes pending; `HighErrorRate` does not, because the failing path is the worker's job, not the client-facing request — that shows up in `queue_depth{state="failed"}` instead. Each rule's reasoning is in [`docs/alerting.md`](docs/alerting.md).
 
 Explore works too: TraceQL `{ span.messaging.system = "bullmq" && kind = consumer }` in Tempo lists every job trace; `{service="worker"} | json | level = "warn"` in Loki shows the retries.
@@ -135,6 +136,35 @@ What each service emits:
 | Traces  | OTLP/HTTP → Collector      | http, express (router + handler, middleware spans dropped), pg, ioredis and undici auto-instrumentation; `orders send` / `orders process` from the helpers with `messaging.*` attributes; probes and `/metrics` ignored                                |
 | Metrics | `/metrics`, scraped        | `http_server_request_duration_seconds`, `http_server_active_requests`, `queue_job_duration_seconds{queue,name,outcome}`, `queue_depth{queue,state}`, `queue_jobs_stalled_total`, Node runtime metrics; histograms carry `trace_id`/`span_id` exemplars |
 | Logs    | stdout JSON → Alloy → Loki | pino; `service`, `level`, `time`, `msg`, business fields, and `trace_id`/`span_id`/`trace_flags` from the active span; `level` becomes a Loki label, the ids become structured metadata                                                                |
+
+### Model calls
+
+`withModelSpan` wraps a call to a model provider in a span carrying the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) — `gen_ai.operation.name`, `gen_ai.provider.name`, the request and response models and the token counts — named `{operation} {model}`, as the conventions specify.
+
+```ts
+const note = await withModelSpan(
+  {
+    operation: 'chat',
+    provider: 'openai',
+    requestModel: 'gpt-4o-mini',
+    onObservation: (observation) => metrics.observeModelCall(observation),
+  },
+  async (report) => {
+    const response = await client.chat(prompt);
+    // Usage arrives in the last chunk of the stream, not as a return value.
+    report({ inputTokens: response.usage.input, outputTokens: response.usage.output });
+    return response.text;
+  },
+);
+```
+
+Three series come out of it. Two are the conventions' own, with their recommended buckets: `gen_ai_client_operation_duration_seconds` and `gen_ai_client_token_usage`, split by `gen_ai_token_type`. The third, `model_cost_usd_total`, deliberately does **not** carry the `gen_ai` prefix — the conventions define no cost metric, because a provider reports tokens, not what they cost this account. Cost here is tokens times a price list held in configuration, and a model missing from that list records tokens with no cost rather than a silent undercount ([ADR 7](docs/adr/0007-cost-is-derived-so-it-does-not-carry-the-genai-prefix.md)).
+
+Prompt and completion text are never recorded. The conventions describe opt-in content capture; this stack does not implement it.
+
+The attribute names are constants in `packages/telemetry/src/genai.ts` rather than imports, because these conventions sit in their own repository at **Development** stability — `gen_ai.system` has already become `gen_ai.provider.name` once, and one file should absorb the next rename.
+
+The worker's `summarise` step is the call being observed. Like `pricing` it is a deterministic stand-in: the workload exists to have something to watch.
 
 ## Sampling, alerting, overhead
 
@@ -206,7 +236,7 @@ services/worker/src/  config · processor (consumer span) · pricing-client · d
 otel/collector.yaml   receivers, tail sampling, exporters — commented
 prometheus/           prometheus.yml · rules/alerts.yml · tests/alerts.test.yml
 tempo/ loki/ alloy/   one config each
-grafana/              provisioning/{datasources,dashboards} · dashboards/{red,queues,drilldown}.json
+grafana/              provisioning/{datasources,dashboards} · dashboards/{red,queues,drilldown,model}.json
 scripts/              break-it.sh · overhead/{run.sh,k6.js,report.ts}
 test/                 integration/ (cross-process) · e2e/ (compose stack)
 docs/                 sampling.md · alerting.md · overhead.md · adr/0001–0006
@@ -222,6 +252,7 @@ One record per decision a reviewer would ask about, in [`docs/adr/`](docs/adr):
 4. [Container logs through Alloy, straight to Loki](docs/adr/0004-alloy-over-promtail.md)
 5. [Exemplars link metrics to traces, and that decides the metrics library](docs/adr/0005-exemplars-as-the-metrics-to-traces-link.md)
 6. [ESM auto-instrumentation through the synchronous loader hook](docs/adr/0006-esm-instrumentation-through-the-synchronous-loader-hook.md)
+7. [Model cost is derived from a configured price list, so it is not a `gen_ai` metric](docs/adr/0007-cost-is-derived-so-it-does-not-carry-the-genai-prefix.md)
 
 Each names the trigger that would make it worth revisiting.
 
