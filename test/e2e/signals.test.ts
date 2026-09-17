@@ -71,6 +71,15 @@ describe.skipIf(!enabled)('signals across the compose stack', () => {
     const pricingParent = spans.find((span) => span.spanId === pricing?.parentSpanId);
     expect(pricingParent?.service).toBe('worker');
     expect(pricingParent?.kind).toBe('SPAN_KIND_CLIENT');
+
+    // The model call is in the same trace, under the consumer span, carrying
+    // the GenAI conventions — and no prompt or completion text.
+    const model = spans.find((span) => span.attributes['gen_ai.operation.name'] === 'chat');
+    expect(model?.service).toBe('worker');
+    expect(model?.name).toBe('chat demo-small');
+    expect(model?.attributes['gen_ai.provider.name']).toBe('demo');
+    expect(Number(model?.attributes['gen_ai.usage.output_tokens'])).toBeGreaterThan(0);
+    expect(model?.parentSpanId).toBe(consumer?.spanId);
   });
 
   it('trace → logs: Loki returns both services’ lines by trace_id structured metadata', async () => {
@@ -146,7 +155,7 @@ describe.skipIf(!enabled)('signals across the compose stack', () => {
       'prometheus',
       'tempo',
     ]);
-    for (const uid of ['nos-red', 'nos-queues', 'nos-drilldown']) {
+    for (const uid of ['nos-red', 'nos-queues', 'nos-drilldown', 'nos-model']) {
       const dashboard = await grafanaJson<{ dashboard: { uid: string } }>(
         `/api/dashboards/uid/${uid}`,
       );
