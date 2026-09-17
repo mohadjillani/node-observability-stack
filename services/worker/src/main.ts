@@ -11,6 +11,7 @@ import { createDatabase } from './db.js';
 import { startMetricsServer } from './metrics-server.js';
 import { createPricingClient } from './pricing-client.js';
 import { createProcessor, type OrderJobData, type ProcessResult } from './processor.js';
+import { createSummariser } from './summariser.js';
 
 const config = loadConfig();
 const service = process.env.OTEL_SERVICE_NAME ?? 'worker';
@@ -26,6 +27,10 @@ const pricing = createPricingClient(config.API_URL);
 const queue = new Queue(config.QUEUE_NAME, { connection });
 const metrics = createMetrics({
   service,
+  // The price list is configuration, not something the provider reports. It
+  // lives next to the service that pays the bill so a rate change is a deploy
+  // rather than a dashboard edit.
+  modelPrices: { 'demo-small': { inputPerMillionUsd: 0.15, outputPerMillionUsd: 0.6 } },
   queueDepth: async () => {
     const counts = await queue.getJobCounts('waiting', 'active', 'delayed', 'failed', 'completed');
     return (['waiting', 'active', 'delayed', 'failed', 'completed'] as const).map((state) => ({
@@ -40,6 +45,7 @@ const process_ = createProcessor({
   queueName: config.QUEUE_NAME,
   writer: database,
   pricing,
+  summarise: createSummariser({ metrics }),
   logger,
   metrics,
 });
